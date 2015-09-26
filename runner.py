@@ -41,10 +41,11 @@ from __future__ import print_function, division
 
 import sys
 import subprocess
+import os.path
+import json
 from argparse import ArgumentParser
 from Tkinter import Tk, Button, Entry, END
 from idlelib.ToolTip import ToolTip
-import json
 
 #----------------------------------------------------------------------------
 class RunnerApp(object):
@@ -67,29 +68,43 @@ class RunnerApp(object):
            }
         ]
     """
+    DEFAULT_CMD_WIDTH = 80
+    
     def __init__(self):
-        self.args = None
-        self.cmds = None
-        self.root = None
+        self.args     = None
+        self.cmds     = None
+        self.title    = None
+        self.cmdWidth = 0
+        self.root     = None
     
     def parseCmdLine(self):
-        ''' This method is called by the PlwApp parent class during initialization.  Subclasses
-            should add their command line arguments here.
-        '''
         parser = ArgumentParser(description=self.__doc__)
-        parser.add_argument("-w", "--cmdWidth", type=int, default=80,
-                            help="The displayed width of the command field (default 80)")
+        parser.add_argument("-w", "--cmdWidth", type=int, default=0,
+                            help="The displayed width of the command field (default {})".format(self.DEFAULT_CMD_WIDTH))
         parser.add_argument(dest="commandFile",
                             help="A file containing button labels and commands, in JSON format")
         self.args = parser.parse_args()
+        
+        if self.args.cmdWidth >= 0:
+            self.cmdWidth = self.args.cmdWidth
 
     def readCmds(self):
+        self.title = os.path.splitext(os.path.basename(self.args.commandFile))[0]
         with open(self.args.commandFile, "r") as f:
-            self.cmds = json.load(f)
+            data = json.load(f)
+            if isinstance(data, (list, tuple)):
+                self.cmds = data
+            else:
+                if "title" in data:
+                    self.title = data["title"]
+                if "cmds" in data:
+                    self.cmds = data["cmds"]
+                if "width" in data and self.cmdWidth <= 0:
+                    self.cmdWidth = data["width"]
+
     
     def makeCmdButton(self, parent, cmd, row):
-        
-        cmdText = Entry(parent, width=self.args.cmdWidth)
+        cmdText = Entry(parent, width=self.cmdWidth)
         cmdText.grid(row=row, column=1, sticky="ew", ipady=2)
         cmdText.delete(0, END)
         cmdText.insert(0, cmd["cmd"])
@@ -103,7 +118,7 @@ class RunnerApp(object):
         
     def buildGUI(self):
         self.root = Tk()
-        self.root.title("MS Test Commands")
+        self.root.title(self.title)
         self.root.grid_columnconfigure(1, weight=1)
         row = 0
         for cmd in self.cmds:
@@ -117,16 +132,12 @@ class RunnerApp(object):
         print("=" * 80)
         
     def run(self, args=None):
-        ''' Put your app's main routine here
-        '''
         self.parseCmdLine()
         self.readCmds()
         self.buildGUI()
         
         self.root.mainloop()
         
-
-
 
 #----------------------------------------------------------------------------
 if __name__ == '__main__':

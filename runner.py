@@ -52,13 +52,15 @@ from FileMenu import FileMenu
 
 #----------------------------------------------------------------------------
 class RunnerPopup(Toplevel):
-    def __init__(self, parent, label="Text:", title="Enter Text", initialText=None, width=20):
+    def __init__(self, parent, label="Text:", title="Enter Text", initialText=None, width=20, allowCancel=False):
         """ Create and display the popup """
         Toplevel.__init__(self, parent)
         self.transient(parent)
+
         
         self.parent = parent
         self.name = None
+        self.columnconfigure(1, weight=1)
         
         self.title(title)
         Label(self, text=label).grid(row=0, column=0, sticky="e")
@@ -70,12 +72,40 @@ class RunnerPopup(Toplevel):
             self.entry.delete(0, END)
             self.entry.insert(0, initialText)
 
-        button = Button(self, text="OK", command=self.ok)
-        button.grid(row=1, column=0, columnspan=2, pady=5)
+        if allowCancel:
+            frame = Frame(self)
+            frame.grid(row=1, column=0, columnspan=2, sticky="we")
+            frame.columnconfigure(0, weight=1)
+            frame.columnconfigure(1, weight=1)
+            button = Button(frame, text=" OK ", command=self.ok)
+            button.grid(row=0, column=0, pady=5, sticky="ew")
+            button = Button(frame, text="Cancel", command=self.cancel)
+            button.grid(row=0, column=1, pady=5, sticky="we")
+        else:
+            button = Button(self, text="OK", command=self.ok)
+            button.grid(row=1, column=0, columnspan=2, pady=5)
 
-    def ok(self):
+        self.entry.bind("<Return>", func=self.ok)
+        self.entry.bind("<Escape>", func=self.cancel)
+
+        px = parent.winfo_rootx()
+        py = parent.winfo_rooty()
+        pw = parent.winfo_width()
+        ph = parent.winfo_height()
+        self.update()
+        ww = self.winfo_width()
+        wh = self.winfo_height()
+        geom = "+%d+%d" % (px+pw//2-ww//2,py+ph//2-wh//2)
+        self.geometry(geom)
+        
+    def ok(self, event=None):
         """ Retrieve the text input and destroy the window """
         self.name = self.entry.get()
+        self.destroy()
+    
+    def cancel(self, event=None):
+        """ Destroy the window and set self.name to None """
+        self.name = None
         self.destroy()
         
     def show(self):
@@ -88,8 +118,8 @@ class RunnerPopup(Toplevel):
 
 #----------------------------------------------------------------------------
 class RunnerNamePopup(RunnerPopup):
-    def __init__(self, parent):
-        RunnerPopup.__init__(self, parent, label="Name:", title="Button Name")
+    def __init__(self, parent, allowCancel=False):
+        RunnerPopup.__init__(self, parent, label="Name:", title="Button Name", allowCancel=allowCancel)
         
 #----------------------------------------------------------------------------
 class RunnerToolTipPopup(RunnerPopup):
@@ -145,30 +175,32 @@ class RunnerFileMenu(FileMenu):
                 self.onExitCB()
 
 #----------------------------------------------------------------------------
-class CmdWidget(Frame):
+class CmdWidget(object):
     updateCB = None
     
-    def __init__(self, parent, cmd, cmdWidth=80):
-        Frame.__init__(self, parent)
+    def __init__(self, parent, cmd, row, cmdWidth=80):
+        #Frame.__init__(self, parent)
         self.parent = parent
         self.cmd = cmd
+        self.row = row
         self.disabled = False
         self.added = False  # new widget, not from a file
         
-        self.cmdText = Entry(self, width=cmdWidth)
-        self.cmdText.grid(row=0, column=1, sticky="ew", ipady=2)
+        self.cmdText = Entry(parent, width=cmdWidth)
+        self.cmdText.grid(row=self.row, column=1, sticky="ew", ipady=2)
         self.cmdText.delete(0, END)
         self.cmdText.insert(0, self.cmd["cmd"])
         self.cmdText.parent = self
         self.cmdText.bind("<Button-3>", func=self.popup)  # attach popup to canvas
 
-        self.button = Button(self, text=self.cmd["button"], command=self.execute)
-        self.button.grid(row=0, column=0, sticky="ew", padx=2, pady=2)
+        self.button = Button(parent, text=self.cmd["button"], command=self.execute)
+        self.button.grid(row=self.row, column=0, sticky="ew", padx=2, pady=2)
         self.button.bind("<Button-3>", func=self.popup)  # attach popup to canvas
 
         self.menu = Menu(self.button, tearoff=False, postcommand=self.onPopup)
         self.menu.add_command(label="Delete", command=self.delete)
         self.menu.add_command(label="Revert", command=self.revert)
+        self.menu.add_command(label="Rename", command=self.rename)
         self.menu.add_command(label="Edit ToolTip", command=self.editToolTip)
         
         self.buttonTT = None
@@ -190,34 +222,39 @@ class CmdWidget(Frame):
         self.menu.entryconfig(0, label="Undelete" if self.disabled else "Delete")
             
     def popup(self, event):
+        """ Display the popup menu (right-mouse menu) """
         self.menu.post(event.x_root, event.y_root)
             
     def isModified(self):
 #         if self.cmd["cmd"] != self.cmdText.get():
 #         print(self.cmd["cmd"] + " != " + self.cmdText.get())
         return self.cmd["cmd"] != self.cmdText.get() or \
+               self.cmd["button"] != self.button["text"] or \
                self.cmd["tooltip"] != self.buttonTT.text or \
-               self.cmd["tooltip"] != self.cmdTextTT.text
+               self.cmd["tooltip"] != self.cmdTextTT.text or \
+               self.disabled
     
     def commit(self):
         """ Copy widget fields to self.cmd fields.
             This is done right before saving the cmds to a file.
         """
+        self.cmd["button"] = self.button["text"].rstrip("*").strip()
         self.cmd["cmd"] = self.cmdText.get().strip()
         self.cmd["tooltip"] = self.buttonTT.text.strip()
         self.cmdText.delete(0, END)
         self.cmdText.insert(0, self.cmd["cmd"])
         self.setToolTip(self.cmd["tooltip"])
-        self.updateButton(event=None)
+        self.updateButton()
         
     def revert(self):
         self.disabled = False
         self.cmdText.config(state=NORMAL)
         self.button.config(state=NORMAL)
+        self.button.config(text=self.cmd["button"])
         self.cmdText.delete(0, END)
         self.cmdText.insert(0, self.cmd["cmd"])
         self.setToolTip(self.cmd["tooltip"])
-        self.updateButton(event=None)
+        self.updateButton()
 
     def delete(self):
         if self.disabled:
@@ -229,20 +266,29 @@ class CmdWidget(Frame):
             self.cmdText.config(state=DISABLED)
             self.button.config(state=DISABLED)
 #         self.optionsButton.config(hide=True)
+        self.updateButton()
 
+    def rename(self):
+        """ Change the button text """
+        name = RunnerNamePopup(self.parent.winfo_toplevel(), allowCancel=True).show()
+        if name:
+            self.button["text"] = name
+        self.updateButton()
+        
     def editToolTip(self):
-        tooltip = RunnerToolTipPopup(self.winfo_toplevel(), initialText=self.buttonTT.text).show()
+        tooltip = RunnerToolTipPopup(self.parent.winfo_toplevel(), initialText=self.buttonTT.text).show()
         if tooltip is None:
             return
         self.setToolTip(tooltip)
-        self.updateButton(event=None)
+        self.updateButton()
         
-    def updateButton(self, event):
+    def updateButton(self, event=None):
+        """ Call this to update the modified state of the button and the app """
         if event:
             widget = event.widget.parent
         else:
             widget = self
-        widget.button.config(text=(widget.cmd["button"]+"*") if widget.isModified() else widget.cmd["button"])
+        widget.button.config(text=(widget.button["text"].rstrip("*")+("*" if widget.isModified() else "")))
         if self.updateCB:
             self.updateCB()
         
@@ -303,6 +349,8 @@ class RunnerApp(object):
         
         if self.args.cmdWidth >= 0:
             self.cmdWidth = self.args.cmdWidth
+        
+        self.title = os.path.splitext(os.path.basename(sys.argv[0]))[0].capitalize()
 
     def onFileOpen(self, path=None):
         """ Called by the fileMenu.onFileOpen method """
@@ -431,8 +479,10 @@ class RunnerApp(object):
         return True
     
     def addWidget(self, cmd):
-        w = CmdWidget(self.root, cmd)
-        w.grid(row=self.row, column=0, columnspan=2)
+        """ Add a widget to the root frame at the specified row.
+            The CmdWidget occupies one row and two columns of the grid.
+        """
+        w = CmdWidget(self.root, cmd, self.row)
         self.row += 1
         self.widgets.append(w)
         return w
@@ -444,12 +494,6 @@ class RunnerApp(object):
 
         self.root.grid_columnconfigure(1, weight=1)
         self.row = 0
-#         for cmd in self.cmds:
-#             self.root.grid_rowconfigure(self.row, pad=2)
-# #             w = CmdWidget(self.root, cmd)
-# #             w.grid(row=self.row, column=0, columnspan=2)
-# #             self.row += 1
-#             self.addWidget(cmd)
             
         CmdWidget.updateCB = self.onUpdate
         self.root.bind("<Control-s>", lambda e: self.fileMenu.onFileSave())
@@ -469,7 +513,7 @@ class RunnerApp(object):
                 self.buildGUI()
                 #self.onFileOpen(self.args.commandFile)
                 self.loadCmds()
-                self.cmdFile = None
+                #self.cmdFile = None
                 
                 self.root.mainloop()
         

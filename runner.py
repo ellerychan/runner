@@ -44,15 +44,15 @@ import subprocess
 import os.path
 import json
 from argparse import ArgumentParser
-from Tkinter import Tk, Button, Entry, Label, Menu, Toplevel, END, BOTH
+from Tkinter import Tk, Frame, Button, Entry, Label, Menu, Toplevel, END, DISABLED, NORMAL
 from idlelib.ToolTip import ToolTip
 
 from FileMenu import FileMenu
 
 
 #----------------------------------------------------------------------------
-class RunnerNamePopup(Toplevel):
-    def __init__(self, parent):
+class RunnerPopup(Toplevel):
+    def __init__(self, parent, label="Text:", title="Enter Text", initialText=None, width=20):
         """ Create and display the popup """
         Toplevel.__init__(self, parent)
         self.transient(parent)
@@ -60,11 +60,15 @@ class RunnerNamePopup(Toplevel):
         self.parent = parent
         self.name = None
         
-        self.title("Button Name")
-        Label(self, text="Name:").grid(row=0, column=0, sticky="e")
+        self.title(title)
+        Label(self, text=label).grid(row=0, column=0, sticky="e")
 
-        self.entry = Entry(self)
+        self.entry = Entry(self, width=width)
         self.entry.grid(row=0, column=1, sticky="we", padx=5)
+        
+        if initialText:
+            self.entry.delete(0, END)
+            self.entry.insert(0, initialText)
 
         button = Button(self, text="OK", command=self.ok)
         button.grid(row=1, column=0, columnspan=2, pady=5)
@@ -83,16 +87,53 @@ class RunnerNamePopup(Toplevel):
         return self.name
 
 #----------------------------------------------------------------------------
+class RunnerNamePopup(RunnerPopup):
+    def __init__(self, parent):
+        RunnerPopup.__init__(self, parent, label="Name:", title="Button Name")
+        
+#----------------------------------------------------------------------------
+class RunnerToolTipPopup(RunnerPopup):
+    def __init__(self, parent, initialText=None):
+        RunnerPopup.__init__(self, parent, label="ToolTip Text:", title="Enter ToolTip", initialText=initialText, width=len(initialText))
+        
+#----------------------------------------------------------------------------
 class RunnerFileMenu(FileMenu):
     def __init__(self, menubar, **kwargs):
         FileMenu.__init__(self, menubar, **kwargs)
         self.onModifiedCB = None
+        self.onFileOpenCB = None
+        self.onRevertCB   = None
         self.saveToFileCB = None
         self.onExitCB     = None
+        
+    def onFileOpen(self, path=None):
+        """ Calls FileMenu.onFileOpen() to:
+                Save a modified file if needed.
+                Get a pathname if None was specified.
+                Return True if successful or False if the operation was cancelled.
+            Then, if FileMenu.onFileOpen() was not cancelled, self.onFileOpenCB()
+            is called with the new path and the return value of self.onFileOpenCB()
+            is returned.  Otherwise, True is returned.
+            If FileMenu.onFileOpen() was cancelled, False is returned.
+        """
+        if FileMenu.onFileOpen(self, path):
+            if self.onFileOpenCB:
+                return self.onFileOpenCB(path)
+            else:
+                return True
+        return False
+    
+    def onRevert(self):
+        if self.onRevertCB:
+            return self.onRevertCB()
+        else:
+            return False
     
     def saveToFile(self, path):
         if self.saveToFileCB:
             return self.saveToFileCB(path)
+        else:
+            return False
     
     def onModifiedChange(self):
         if self.onModifiedCB:
@@ -102,8 +143,114 @@ class RunnerFileMenu(FileMenu):
         if FileMenu.onExit(self):
             if self.onExitCB:
                 self.onExitCB()
-        
 
+#----------------------------------------------------------------------------
+class CmdWidget(Frame):
+    updateCB = None
+    
+    def __init__(self, parent, cmd, cmdWidth=80):
+        Frame.__init__(self, parent)
+        self.parent = parent
+        self.cmd = cmd
+        self.disabled = False
+        self.added = False  # new widget, not from a file
+        
+        self.cmdText = Entry(self, width=cmdWidth)
+        self.cmdText.grid(row=0, column=1, sticky="ew", ipady=2)
+        self.cmdText.delete(0, END)
+        self.cmdText.insert(0, self.cmd["cmd"])
+        self.cmdText.parent = self
+        self.cmdText.bind("<Button-3>", func=self.popup)  # attach popup to canvas
+
+        self.button = Button(self, text=self.cmd["button"], command=self.execute)
+        self.button.grid(row=0, column=0, sticky="ew", padx=2, pady=2)
+        self.button.bind("<Button-3>", func=self.popup)  # attach popup to canvas
+
+        self.menu = Menu(self.button, tearoff=False, postcommand=self.onPopup)
+        self.menu.add_command(label="Delete", command=self.delete)
+        self.menu.add_command(label="Revert", command=self.revert)
+        self.menu.add_command(label="Edit ToolTip", command=self.editToolTip)
+        
+        self.buttonTT = None
+        self.cmdTextTT = None
+        if "tooltip" in self.cmd:
+            self.setToolTip(self.cmd["tooltip"])
+            
+        # Attach an event callback that gets called after the Entry field is updated
+        bindtags = list(self.cmdText.bindtags())
+        bindtags.insert(2, "PostInsert") # index 1 is where most default bindings live
+        self.cmdText.bindtags(tuple(bindtags))
+        self.cmdText.bind_class("PostInsert", "<Key>", self.updateButton)
+    
+    def setToolTip(self, tooltipText):
+        self.buttonTT = ToolTip(self.button, tooltipText)
+        self.cmdTextTT = ToolTip(self.cmdText, tooltipText)
+        
+    def onPopup(self):
+        self.menu.entryconfig(0, label="Undelete" if self.disabled else "Delete")
+            
+    def popup(self, event):
+        self.menu.post(event.x_root, event.y_root)
+            
+    def isModified(self):
+#         if self.cmd["cmd"] != self.cmdText.get():
+#         print(self.cmd["cmd"] + " != " + self.cmdText.get())
+        return self.cmd["cmd"] != self.cmdText.get() or \
+               self.cmd["tooltip"] != self.buttonTT.text or \
+               self.cmd["tooltip"] != self.cmdTextTT.text
+    
+    def commit(self):
+        """ Copy widget fields to self.cmd fields.
+            This is done right before saving the cmds to a file.
+        """
+        self.cmd["cmd"] = self.cmdText.get().strip()
+        self.cmd["tooltip"] = self.buttonTT.text.strip()
+        self.cmdText.delete(0, END)
+        self.cmdText.insert(0, self.cmd["cmd"])
+        self.setToolTip(self.cmd["tooltip"])
+        self.updateButton(event=None)
+        
+    def revert(self):
+        self.disabled = False
+        self.cmdText.config(state=NORMAL)
+        self.button.config(state=NORMAL)
+        self.cmdText.delete(0, END)
+        self.cmdText.insert(0, self.cmd["cmd"])
+        self.setToolTip(self.cmd["tooltip"])
+        self.updateButton(event=None)
+
+    def delete(self):
+        if self.disabled:
+            self.disabled = False
+            self.cmdText.config(state=NORMAL)
+            self.button.config(state=NORMAL)
+        else:
+            self.disabled = True
+            self.cmdText.config(state=DISABLED)
+            self.button.config(state=DISABLED)
+#         self.optionsButton.config(hide=True)
+
+    def editToolTip(self):
+        tooltip = RunnerToolTipPopup(self.winfo_toplevel(), initialText=self.buttonTT.text).show()
+        if tooltip is None:
+            return
+        self.setToolTip(tooltip)
+        self.updateButton(event=None)
+        
+    def updateButton(self, event):
+        if event:
+            widget = event.widget.parent
+        else:
+            widget = self
+        widget.button.config(text=(widget.cmd["button"]+"*") if widget.isModified() else widget.cmd["button"])
+        if self.updateCB:
+            self.updateCB()
+        
+    def execute(self):
+        print("\nRunning {}:".format(self.cmd["button"]))
+        subprocess.call(self.cmdText.get(), shell=True)
+        print("=" * 80)
+        
 #----------------------------------------------------------------------------
 class RunnerApp(object):
     """ A simple GUI for running a canned set of commands on demand.
@@ -134,6 +281,9 @@ class RunnerApp(object):
         self.cmdWidth = 0
         self.root     = None
         self.fileMenu = None
+        self.widgets  = []
+        self.quit     = False
+        self.cmdFile = None
         
     @property
     def isModified(self):
@@ -154,9 +304,23 @@ class RunnerApp(object):
         if self.args.cmdWidth >= 0:
             self.cmdWidth = self.args.cmdWidth
 
+    def onFileOpen(self, path=None):
+        """ Called by the fileMenu.onFileOpen method """
+        if path:
+            self.fileMenu.currFile = path
+        if self.fileMenu.currFile and os.path.exists(self.fileMenu.currFile):
+            self.cmdFile = self.fileMenu.currFile
+            self.onExit(quit=False)
+    
+    def loadCmds(self):
+        if self.cmdFile and os.path.exists(self.cmdFile):
+            self.readCmds()
+            for cmd in self.cmds:
+                self.addWidget(cmd)
+        
     def readCmds(self):
-        self.title = os.path.splitext(os.path.basename(self.args.commandFile))[0]
-        with open(self.args.commandFile, "r") as f:
+        self.title = os.path.splitext(os.path.basename(self.cmdFile))[0]
+        with open(self.cmdFile, "r") as f:
             data = json.load(f)
             if isinstance(data, (list, tuple)):
                 self.cmds = data
@@ -169,24 +333,41 @@ class RunnerApp(object):
                     self.cmdWidth = data["width"]
 
     
-    def makeCmdButton(self, parent, cmd, row):
-        cmdText = Entry(parent, width=self.cmdWidth)
-        cmdText.grid(row=row, column=1, sticky="ew", ipady=2)
-        cmdText.delete(0, END)
-        cmdText.insert(0, cmd["cmd"])
-
-        button = Button(parent, text=cmd["button"], command=lambda: self.execute(cmd["button"], cmdText))
-        button.grid(row=row, column=0, sticky="ew", padx=2, pady=2)
-        
-        if "tooltip" in cmd:
-            ToolTip(button, cmd["tooltip"])
-            ToolTip(cmdText, cmd["tooltip"])
+#     def makeCmdButton(self, parent, cmd, row):
+#         cmdText = Entry(parent, width=self.cmdWidth)
+#         cmdText.grid(row=row, column=1, sticky="ew", ipady=2)
+#         cmdText.delete(0, END)
+#         cmdText.insert(0, cmd["cmd"])
+# 
+#         button = Button(parent, text=cmd["button"], command=lambda: self.execute(cmd["button"], cmdText))
+#         button.grid(row=row, column=0, sticky="ew", padx=2, pady=2)
+#         
+#         if "tooltip" in cmd:
+#             ToolTip(button, cmd["tooltip"])
+#             ToolTip(cmdText, cmd["tooltip"])
         
     def setTitle(self):
-        self.root.title("{}: {}{}".format(self.title, os.path.basename(self.args.commandFile), " *" if self.isModified else ""))
+        self.root.title("{}: {}{}".format(self.title, os.path.basename(self.cmdFile), " *" if self.isModified else ""))
     
     def onModified(self, isModified):
         self.setTitle()
+    
+    def onRevert(self):
+        for w in self.widgets:
+            if w.added:
+                w.delete()
+            else:
+                w.revert()
+        self.isModified = False
+        return True
+    
+    def onUpdate(self):
+        """ Check whether any widget is modified, and set the isModified flag accordingly """
+        for w in self.widgets:
+            if w.isModified():
+                self.isModified = True
+                return
+        self.isModified = False
         
     def addMenuBar(self):
         """ Attaches a Menu to the root window """
@@ -196,6 +377,8 @@ class RunnerApp(object):
         self.fileMenu = RunnerFileMenu(menubar, tearoff=False)
         menubar.add_cascade(label="File", menu=self.fileMenu)
         self.fileMenu.onModifiedCB = self.onModified
+        self.fileMenu.onRevertCB   = self.onRevert
+        self.fileMenu.onFileOpenCB = lambda f: self.onFileOpen(f)
         self.fileMenu.saveToFileCB = self.saveToFile
         self.fileMenu.onExitCB     = self.onExit
         self.fileMenu.currFile = self.args.commandFile
@@ -217,24 +400,42 @@ class RunnerApp(object):
         
         cmd = {
             "button":  name,
-            "cmd":     "new stuff",
-            "tooltip": "just added"
+            "cmd":     "",
+            "tooltip": name
         }
         self.cmds.append(cmd)
 
-        self.makeCmdButton(self.root, cmd, self.row)
-        self.row += 1
+#         self.makeCmdButton(self.root, cmd, self.row)
+#         self.row += 1
+        w = self.addWidget(cmd)
+        w.added = True
         self.isModified = True
     
+    def widgetCmds(self):
+        widgetData = []
+        for w in self.widgets:
+            widgetData.append(w.cmd)
+        return widgetData
+    
     def saveToFile(self, path):
+        for w in self.widgets:
+            w.commit()
+            
         data = {
                 "title": self.title,
                 "width": self.cmdWidth,
-                "cmds" : self.cmds,
+                "cmds" : self.widgetCmds(),
                }
         with open(path, "w") as f:
             json.dump(data, f, indent=True)
         return True
+    
+    def addWidget(self, cmd):
+        w = CmdWidget(self.root, cmd)
+        w.grid(row=self.row, column=0, columnspan=2)
+        self.row += 1
+        self.widgets.append(w)
+        return w
         
     def buildGUI(self):
         self.root = Tk()
@@ -243,28 +444,34 @@ class RunnerApp(object):
 
         self.root.grid_columnconfigure(1, weight=1)
         self.row = 0
-        for cmd in self.cmds:
-            self.root.grid_rowconfigure(self.row, pad=2)
-            self.makeCmdButton(self.root, cmd, self.row)
-            self.row += 1
+#         for cmd in self.cmds:
+#             self.root.grid_rowconfigure(self.row, pad=2)
+# #             w = CmdWidget(self.root, cmd)
+# #             w.grid(row=self.row, column=0, columnspan=2)
+# #             self.row += 1
+#             self.addWidget(cmd)
             
+        CmdWidget.updateCB = self.onUpdate
         self.root.bind("<Control-s>", lambda e: self.fileMenu.onFileSave())
         self.root.protocol("WM_DELETE_WINDOW", self.fileMenu.onExit)
 
-    def onExit(self):
+    def onExit(self, quit=True):
+        self.quit = quit
         self.root.destroy()
 
-    def execute(self, label, cmdWidget):
-        print("\nRunning {}:".format(label))
-        subprocess.call(cmdWidget.get(), shell=True)
-        print("=" * 80)
-        
     def run(self, args=None):
         self.parseCmdLine()
-        self.readCmds()
-        self.buildGUI()
+        self.cmdFile = self.args.commandFile
         
-        self.root.mainloop()
+        while not self.quit:
+#         self.readCmds()
+            if self.cmdFile and os.path.exists(self.cmdFile):
+                self.buildGUI()
+                #self.onFileOpen(self.args.commandFile)
+                self.loadCmds()
+                self.cmdFile = None
+                
+                self.root.mainloop()
         
 
 #----------------------------------------------------------------------------

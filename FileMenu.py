@@ -23,6 +23,7 @@ class FileMenu(Menu):
         
         self.add_command(label="New", command=self.onFileNew)
         self.add_command(label="Open...", command=self.onFileOpen)
+        self.add_command(label="Revert", command=self.onRevert)
         self.add_command(label="Save", command=self.onFileSave)
         self.add_command(label="Save As...", command=self.onFileSaveAs)
         self.add_command(label="Export...", command=self.onFileExport)
@@ -78,9 +79,15 @@ class FileMenu(Menu):
         return True
 
     def onFileOpen(self, path=None):
-        """ Return False if the operation was cancelled. """
-        if not self.askSave():
-            return False
+        """ Save a modified file if needed.
+            Get a pathname if None was specified.
+            Return True if successful or False if the operation was cancelled.
+        """
+        if self.isModified:
+            if not self.askSave():
+                return False
+        
+        # self.isModified is False at this point
         
         if path is None:  # Interactive file open
 #             ftypes = [('JSON files', '*.json'), ('All files', '*')]
@@ -88,7 +95,10 @@ class FileMenu(Menu):
             
         if path:
             self.currFile = path
-            self.setModified(False)
+        return path and len(path)
+
+    def onRevert(self):
+        """ Reset to the initial state of the opened file """
         return True
     
     def onFileSave(self):

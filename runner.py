@@ -178,13 +178,13 @@ class RunnerFileMenu(FileMenu):
 class CmdWidget(object):
     updateCB = None
     
-    def __init__(self, parent, cmd, row, cmdWidth=80):
+    def __init__(self, parent, cmd, row, cmdWidth=80, added=False):
         #Frame.__init__(self, parent)
         self.parent = parent
         self.cmd = cmd
         self.row = row
         self.disabled = False
-        self.added = False  # new widget, not from a file
+        self.added = added  # new widget, not from a file
         
         self.cmdText = Entry(parent, width=cmdWidth)
         self.cmdText.grid(row=self.row, column=1, sticky="ew", ipady=2)
@@ -228,11 +228,12 @@ class CmdWidget(object):
     def isModified(self):
 #         if self.cmd["cmd"] != self.cmdText.get():
 #         print(self.cmd["cmd"] + " != " + self.cmdText.get())
-        return self.cmd["cmd"] != self.cmdText.get() or \
-               self.cmd["button"] != self.button["text"] or \
-               self.cmd["tooltip"] != self.buttonTT.text or \
-               self.cmd["tooltip"] != self.cmdTextTT.text or \
-               self.disabled
+        return self.cmd["cmd"] != self.cmdText.get().strip() or \
+               self.cmd["button"] != self.button["text"].rstrip("*").strip() or \
+               self.cmd["tooltip"] != self.buttonTT.text.strip() or \
+               self.cmd["tooltip"] != self.cmdTextTT.text.strip() or \
+               self.disabled or \
+               self.added
     
     def commit(self):
         """ Copy widget fields to self.cmd fields.
@@ -244,6 +245,7 @@ class CmdWidget(object):
         self.cmdText.delete(0, END)
         self.cmdText.insert(0, self.cmd["cmd"])
         self.setToolTip(self.cmd["tooltip"])
+        self.added = False
         self.updateButton()
         
     def revert(self):
@@ -361,6 +363,7 @@ class RunnerApp(object):
             self.onExit(quit=False)
     
     def loadCmds(self):
+        self.cmds = []
         if self.cmdFile and os.path.exists(self.cmdFile):
             self.readCmds()
             for cmd in self.cmds:
@@ -456,7 +459,7 @@ class RunnerApp(object):
 #         self.makeCmdButton(self.root, cmd, self.row)
 #         self.row += 1
         w = self.addWidget(cmd)
-        w.added = True
+        w.updateButton()
         self.isModified = True
     
     def widgetCmds(self):
@@ -482,7 +485,7 @@ class RunnerApp(object):
         """ Add a widget to the root frame at the specified row.
             The CmdWidget occupies one row and two columns of the grid.
         """
-        w = CmdWidget(self.root, cmd, self.row)
+        w = CmdWidget(self.root, cmd, self.row, added=True)
         self.row += 1
         self.widgets.append(w)
         return w
@@ -506,16 +509,18 @@ class RunnerApp(object):
     def run(self, args=None):
         self.parseCmdLine()
         self.cmdFile = self.args.commandFile
+        firstTime = True
         
         while not self.quit:
 #         self.readCmds()
-            if self.cmdFile and os.path.exists(self.cmdFile):
+            if firstTime or (self.cmdFile and os.path.exists(self.cmdFile)):
                 self.buildGUI()
                 #self.onFileOpen(self.args.commandFile)
                 self.loadCmds()
                 #self.cmdFile = None
                 
                 self.root.mainloop()
+                firstTime = False
         
 
 #----------------------------------------------------------------------------
